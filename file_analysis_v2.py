@@ -1,28 +1,7 @@
 import os
-import sys
-import subprocess
 import argparse
 from datetime import datetime
 import csv
-
-def print_usage():
-    print("""
-  Usage: file_analysis.py <Analysis Type> <Path To Analyze>
-
-     Flag    Analysis Type
-     -s      Breakdown by File Size
-     -c      Breakdown by File Creation Days
-     -m      Breakdown by File Modification Days
-     -a      Breakdown by File Access Days
-     -ac     Breakdown by File Access Days, Output in CSV
-     -u      Breakdown by UID
-     -g      Breakdown by GID
-
-  Please Note:
-    You will need to modify the work_dir variable to match your system.
-    You will need to modify the node_class variable to match your system. If
-    you want to use the default, you can set the value to ''.
-""")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze files in a directory based on various criteria.")
@@ -37,17 +16,6 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def setup_work_area(work_dir):
-    os.makedirs(work_dir, exist_ok=True)
-    policy_file = os.path.join(work_dir, "policy.in")
-    log_file = os.path.join(work_dir, "policy.out")
-    return policy_file, log_file
-
-def apply_policy(analysis_path, work_dir, node_class, policy_file, log_file):
-    command = f"/usr/lpp/mmfs/bin/mmapplypolicy {analysis_path} -f {work_dir} -g {work_dir} {node_class} -P {policy_file} -I defer"
-    with open(log_file, "w") as log:
-        subprocess.run(command, shell=True, stdout=log, stderr=subprocess.STDOUT)
-
 def file_info(directory):
     files_info = []
     for root, _, files in os.walk(directory):
@@ -57,54 +25,53 @@ def file_info(directory):
             file_data = {
                 'name': file,
                 'size': stats.st_size,
-                'creation_time': datetime.fromtimestamp(stats.st_ctime),
-                'modification_time': datetime.fromtimestamp(stats.st_mtime),
-                'access_time': datetime.fromtimestamp(stats.st_atime),
+                'creation_time': datetime.fromtimestamp(stats.st_ctime).date(),
+                'modification_time': datetime.fromtimestamp(stats.st_mtime).date(),
+                'access_time': datetime.fromtimestamp(stats.st_atime).date(),
                 'uid': stats.st_uid,
                 'gid': stats.st_gid
             }
             files_info.append(file_data)
     return files_info
 
-def display_files_info(files_info, analysis_type):
-    if analysis_type == 'accesscsv':
-        with open('access_times.csv', 'w', newline='') as csvfile:
-            fieldnames = ['name', 'access_time']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for file_data in files_info:
-                writer.writerow({'name': file_data['name'], 'access_time': file_data['access_time'].strftime('%Y-%m-%d %H:%M:%S')})
-        print("Access times report saved to access_times.csv")
-    else:
-        for file_data in files_info:
-            if analysis_type in ['size', 'creation', 'modification', 'access', 'uid', 'gid']:
-                print(f"{file_data['name']}: {file_data[analysis_type]}")
+def categorize_files(files_info, key, bucket_func=None):
+    buckets = {}
+    for file_data in files_info:
+        bucket_key = bucket_func(file_data[key]) if bucket_func else file_data[key]
+        if bucket_key not in buckets:
+            buckets[bucket_key] = {'count': 0, 'bytes': 0}
+        buckets[bucket_key]['count'] += 1
+        buckets[bucket_key]['bytes'] += file_data['size']
+    return buckets
+
+def display_buckets(buckets):
+    for key, data in sorted(buckets.items()):
+        print(f"{key:<20} {data['count']:>10} {data['bytes']:>20}")
 
 def main():
     args = parse_args()
-    work_dir = "/tmp/policy.{}".format(os.getpid())
-    policy_file, log_file = setup_work_area(work_dir)
-
-    # Dummy apply_policy to demonstrate the concept
-    apply_policy(args.directory, work_dir, '', policy_file, log_file)
-    
     files_info = file_info(args.directory)
+
     if args.size:
-        display_files_info(files_info, 'size')
-    elif args.creation:
-        display_files_info(files_info, 'creation')
-    elif args.modification:
-        display_files_info(files_info, 'modification')
-    elif args.access:
-        display_files_info(files_info, 'access')
+        buckets = categorize_files(files_info, 'size', lambda x: f"<{x // 1024}K" if x < 1024**2 else f"<{x // (1024**2)}M")
+    elif args.creation or args.modification or args.access:
+        date_key = 'creation_time' if args.creation else 'modification_time' if args.modification else 'access_time'
+        buckets = categorize_files(files_info, date_key)
+    elif args.uid or args.gid:
+        user_key = 'uid' if args.uid else 'gid'
+        buckets = categorize_files(files_info, user_key)
     elif args.accesscsv:
-        display_files_info(files_info, 'accesscsv')
-    elif args.uid:
-        display_files_info(files_info, 'uid')
-    elif args.gid:
-        display_files_info(files_info, 'gid')
-    else:
-        print_usage()
+        buckets = categorize_files(files_info, 'access_time')
+        with open('access_times.csv', 'w', newline='') as csvfile:
+            fieldnames = ['date', 'count', 'bytes']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for key, data in sorted(buckets.items()):
+                writer.writerow({'date': key, 'count': data['count'], 'bytes': data['bytes']})
+        print("Access times report saved to access_times.csv")
+        return
+
+    display_buckets(buckets)
 
 if __name__ == "__main__":
     main()
