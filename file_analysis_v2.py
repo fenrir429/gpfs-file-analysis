@@ -2,6 +2,7 @@ import os
 import argparse
 from datetime import datetime
 import csv
+import sys
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze files in a directory based on various criteria.")
@@ -34,44 +35,56 @@ def file_info(directory):
             files_info.append(file_data)
     return files_info
 
-def categorize_files(files_info, key, bucket_func=None):
+def categorize_files(files_info, key):
     buckets = {}
     for file_data in files_info:
-        bucket_key = bucket_func(file_data[key]) if bucket_func else file_data[key]
-        if bucket_key not in buckets:
-            buckets[bucket_key] = {'count': 0, 'bytes': 0}
-        buckets[bucket_key]['count'] += 1
-        buckets[bucket_key]['bytes'] += file_data['size']
+        identifier = file_data[key]
+        if identifier not in buckets:
+            buckets[identifier] = {'count': 0, 'bytes': 0}
+        buckets[identifier]['count'] += 1
+        buckets[identifier]['bytes'] += file_data['size']
     return buckets
 
 def display_buckets(buckets):
+    print(f"{'Category':<20} {'# of Files':<15} {'# of Bytes':<15}")
     for key, data in sorted(buckets.items()):
-        print(f"{key:<20} {data['count']:>10} {data['bytes']:>20}")
+        print(f"{key:<20} {data['count']:>15} {data['bytes']:>15}")
+
+def output_to_csv(buckets, filename="output.csv"):
+    with open(filename, 'w', newline='') as csvfile:
+        fieldnames = ['Category', 'Count', 'Bytes']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for key, data in sorted(buckets.items()):
+            writer.writerow({'Category': key, 'Count': data['count'], 'Bytes': data['bytes']})
 
 def main():
     args = parse_args()
     files_info = file_info(args.directory)
 
     if args.size:
-        buckets = categorize_files(files_info, 'size', lambda x: f"<{x // 1024}K" if x < 1024**2 else f"<{x // (1024**2)}M")
-    elif args.creation or args.modification or args.access:
-        date_key = 'creation_time' if args.creation else 'modification_time' if args.modification else 'access_time'
-        buckets = categorize_files(files_info, date_key)
-    elif args.uid or args.gid:
-        user_key = 'uid' if args.uid else 'gid'
-        buckets = categorize_files(files_info, user_key)
-    elif args.accesscsv:
-        buckets = categorize_files(files_info, 'access_time')
-        with open('access_times.csv', 'w', newline='') as csvfile:
-            fieldnames = ['date', 'count', 'bytes']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for key, data in sorted(buckets.items()):
-                writer.writerow({'date': key, 'count': data['count'], 'bytes': data['bytes']})
-        print("Access times report saved to access_times.csv")
-        return
+        key = 'size'
+    elif args.creation:
+        key = 'creation_time'
+    elif args.modification:
+        key = 'modification_time'
+    elif args.access:
+        key = 'access_time'
+    elif args.uid:
+        key = 'uid'
+    elif args.gid:
+        key = 'gid'
+    else:
+        print("No valid analysis type provided. Use -h for help.")
+        sys.exit(1)
 
-    display_buckets(buckets)
+    buckets = categorize_files(files_info, key)
+
+    if args.accesscsv:
+        output_to_csv(buckets, "access_times.csv")
+        print("Access times report saved to access_times.csv")
+    else:
+        display_buckets(buckets)
 
 if __name__ == "__main__":
     main()
