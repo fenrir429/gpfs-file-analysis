@@ -1,6 +1,6 @@
 import os
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import csv
 import sys
 
@@ -10,14 +10,11 @@ def parse_args():
     parser.add_argument('-s', '--size', action='store_true', help='Breakdown by File Size')
     parser.add_argument('-c', '--creation', action='store_true', help='Breakdown by File Creation Days')
     parser.add_argument('-m', '--modification', action='store_true', help='Breakdown by File Modification Days')
-    parser.add_argument('-a', '--access', action='store_true', help='Breakdown by File Access Days')
-    parser.add_argument('-ac', '--accesscsv', action='store_true', help='Breakdown by File Access Days, Output in CSV')
-    parser.add_argument('-u', '--uid', action='store_true', help='Breakdown by UID')
-    parser.add_argument('-g', '--gid', action='store_true', help='Breakdown by GID')
     args = parser.parse_args()
     return args
 
 def file_info(directory):
+    now = datetime.now()
     files_info = []
     for root, _, files in os.walk(directory):
         for file in files:
@@ -26,37 +23,46 @@ def file_info(directory):
             file_data = {
                 'name': file,
                 'size': stats.st_size,
-                'creation_time': datetime.fromtimestamp(stats.st_ctime).date(),
-                'modification_time': datetime.fromtimestamp(stats.st_mtime).date(),
-                'access_time': datetime.fromtimestamp(stats.st_atime).date(),
-                'uid': stats.st_uid,
-                'gid': stats.st_gid
+                'creation_time': (now - datetime.fromtimestamp(stats.st_ctime)).days,
+                'modification_time': (now - datetime.fromtimestamp(stats.st_mtime)).days,
             }
             files_info.append(file_data)
     return files_info
 
 def categorize_files(files_info, key):
     buckets = {}
-    for file_data in files_info:
-        identifier = file_data[key]
-        if identifier not in buckets:
-            buckets[identifier] = {'count': 0, 'bytes': 0}
-        buckets[identifier]['count'] += 1
-        buckets[identifier]['bytes'] += file_data['size']
+    if key in ['creation_time', 'modification_time']:
+        for file_data in files_info:
+            days = file_data[key]
+            bucket_key = f"{days} days old"
+            if bucket_key not in buckets:
+                buckets[bucket_key] = {'count': 0, 'bytes': 0}
+            buckets[bucket_key]['count'] += 1
+            buckets[bucket_key]['bytes'] += file_data['size']
+    elif key == 'size':
+        size_ranges = [
+            (4*1024, '<4K'), (64*1024, '4K - 64K'), (128*1024, '64K - 128K'), 
+            (256*1024, '128K - 256K'), (512*1024, '256K - 512K'), (1024**2, '512K - 1M'),
+            (2*1024**2, '1M - 2M'), (4*1024**2, '2M - 4M'), (8*1024**2, '4M - 8M'),
+            (16*1024**2, '8M - 16M'), (100*1024**2, '16M - 100M'), (256*1024**2, '100M - 256M'),
+            (512*1024**2, '256M - 512M'), (1024**3, '512M - 1G'), (5*1024**3, '1G - 5G'),
+            (float('inf'), '>5G'),
+        ]
+        for file_data in files_info:
+            size = file_data['size']
+            for limit, label in size_ranges:
+                if size <= limit:
+                    if label not in buckets:
+                        buckets[label] = {'count': 0, 'bytes': 0}
+                    buckets[label]['count'] += 1
+                    buckets[label]['bytes'] += size
+                    break
     return buckets
 
 def display_buckets(buckets):
     print(f"{'Category':<20} {'# of Files':<15} {'# of Bytes':<15}")
-    for key, data in sorted(buckets.items()):
+    for key, data in sorted(buckets.items(), key=lambda x: x[1]['count'], reverse=True):
         print(f"{key:<20} {data['count']:>15} {data['bytes']:>15}")
-
-def output_to_csv(buckets, filename="output.csv"):
-    with open(filename, 'w', newline='') as csvfile:
-        fieldnames = ['Category', 'Count', 'Bytes']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for key, data in sorted(buckets.items()):
-            writer.writerow({'Category': key, 'Count': data['count'], 'Bytes': data['bytes']})
 
 def main():
     args = parse_args()
@@ -68,23 +74,12 @@ def main():
         key = 'creation_time'
     elif args.modification:
         key = 'modification_time'
-    elif args.access:
-        key = 'access_time'
-    elif args.uid:
-        key = 'uid'
-    elif args.gid:
-        key = 'gid'
     else:
         print("No valid analysis type provided. Use -h for help.")
         sys.exit(1)
 
     buckets = categorize_files(files_info, key)
-
-    if args.accesscsv:
-        output_to_csv(buckets, "access_times.csv")
-        print("Access times report saved to access_times.csv")
-    else:
-        display_buckets(buckets)
+    display_buckets(buckets)
 
 if __name__ == "__main__":
     main()
