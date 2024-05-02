@@ -93,4 +93,18 @@ def main():
         display_files_info(files_info, 'size')
     elif args.creation:
         display_files_info(files_info, 'creation')
-    elif args.modification
+    elif args.modification:
+        display_files_info(files_info, 'modification')
+    elif args.access:
+        display_files_info(files_info, 'access')
+    elif args.accesscsv:
+        display_files_info(files_info, 'accesscsv')
+    elif args.uid:
+        display_files_info(files_info, 'uid')
+    elif args.gid:
+        display_files_info(files_info, 'gid')
+    else:
+        print_usage()
+
+if __name__ == "__main__":
+    main()
