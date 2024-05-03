@@ -2,6 +2,8 @@ import os
 import argparse
 from datetime import datetime
 import csv
+import pwd
+import grp
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze files in a directory based on various criteria.")
@@ -11,8 +13,8 @@ def parse_args():
     parser.add_argument('-m', '--modification', action='store_true', help='Breakdown by File Modification Days')
     parser.add_argument('-a', '--access', action='store_true', help='Breakdown by File Access Days')
     parser.add_argument('-ac', '--accesscsv', action='store_true', help='Breakdown by File Access Days, Output in CSV')
-    parser.add_argument('-u', '--uid', action='store_true', help='Breakdown by UID')
-    parser.add_argument('-g', '--gid', action='store_true', help='Breakdown by GID')
+    parser.add_argument('-u', '--uid', action='store_true', help='Breakdown by UID (Usernames)')
+    parser.add_argument('-g', '--gid', action='store_true', help='Breakdown by GID (Group Names)')
     parser.add_argument('-csv', '--outputcsv', action='store_true', help='Output results to CSV file')
     args = parser.parse_args()
     return args
@@ -24,6 +26,14 @@ def file_info(directory):
         for file in files:
             filepath = os.path.join(root, file)
             stats = os.stat(filepath)
+            try:
+                username = pwd.getpwuid(stats.st_uid).pw_name
+            except KeyError:
+                username = f"UID {stats.st_uid}"
+            try:
+                groupname = grp.getgrgid(stats.st_gid).gr_name
+            except KeyError:
+                groupname = f"GID {stats.st_gid}"
             file_data = {
                 'name': file,
                 'path': filepath,
@@ -31,8 +41,8 @@ def file_info(directory):
                 'creation_time': (now - datetime.fromtimestamp(stats.st_ctime)).days,
                 'modification_time': (now - datetime.fromtimestamp(stats.st_mtime)).days,
                 'access_time': (now - datetime.fromtimestamp(stats.st_atime)).days,
-                'uid': stats.st_uid,
-                'gid': stats.st_gid
+                'username': username,
+                'groupname': groupname
             }
             files_info.append(file_data)
     return files_info
@@ -40,7 +50,7 @@ def file_info(directory):
 def categorize_files(files_info, key):
     buckets = {}
     for file_data in files_info:
-        identifier = str(file_data[key])
+        identifier = file_data[key]
         if key in ['creation_time', 'modification_time', 'access_time']:
             days = int(identifier)
             bucket_key = f"{days} days old" if days > 0 else 'Today'
@@ -54,7 +64,7 @@ def categorize_files(files_info, key):
 
 def display_buckets(buckets):
     print(f"{'Category':<20} {'# of Files':<15} {'# of Bytes':<15}")
-    for key, data in sorted(buckets.items(), key=lambda item: item[0]):
+    for key, data in sorted(buckets.items(), key=lambda item: (item[1]['count'], item[0]), reverse=True):
         print(f"{key:<20} {data['count']:>15} {data['bytes']:>15}")
 
 def output_to_csv(buckets, filename):
@@ -69,7 +79,9 @@ def output_to_csv(buckets, filename):
 def main():
     args = parse_args()
     files_info = file_info(args.directory)
-    key = 'size' if args.size else 'creation_time' if args.creation else 'modification_time' if args.modification else 'access_time' if args.access else 'uid' if args.uid else 'gid' if args.gid else None
+    key = 'username' if args.uid else 'groupname' if args.gid else \
+          'size' if args.size else 'creation_time' if args.creation else \
+          'modification_time' if args.modification else 'access_time' if args.access else None
     if not key:
         print("No valid analysis type provided. Use -h for help.")
         return
